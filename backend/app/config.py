@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "RG Time API"
-    database_url: str = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+    database_url: str = "postgresql://postgres@127.0.0.1:5432/postgres"
     db_schema: str = "rgtime"
     timezone: str = "America/New_York"
 

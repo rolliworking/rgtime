@@ -3,7 +3,7 @@ from typing import Annotated
 import asyncpg
 from fastapi import Depends, Request
 
-from app.database import get_db
+from app.db_session import get_db
 
 DbConn = Annotated[asyncpg.Connection, Depends(get_db)]
 

@@ -1,9 +1,9 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
 
 import asyncpg
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers import config as config_router
@@ -25,14 +25,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    from app.routers import kiosk as kiosk_router
+
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(health.router)
     app.include_router(config_router.router, prefix="/api/v1")
+    app.include_router(kiosk_router.router, prefix="/api/v1")
     return app
-
-
-async def get_db(request: Any) -> asyncpg.Connection:
-    pool: asyncpg.Pool = request.app.state.db_pool
-    async with pool.acquire() as connection:
-        yield connection
