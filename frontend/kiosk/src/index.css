@@ -119,3 +119,31 @@ body {
   color: #b00020;
   font-weight: 600;
 }
+
+.offline-banner {
+  background: #ff9800;
+  color: #000;
+  font-weight: 700;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+
+.queue-banner {
+  background: #fff3cd;
+  color: #664d03;
+  font-weight: 600;
+  padding: 0.4rem 1rem;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+
+.sync-alert {
+  margin-top: 1rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #fff;
+  background: #b00020;
+  padding: 1rem 1.5rem;
+  border-radius: 12px;
+}

@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.audit import write_audit_log
+from app.config import get_settings
 from app.dependencies import DbConn, get_actor_type
 from app.pin import validate_pin_format
 from app.services.photos import save_punch_photos
@@ -20,8 +21,8 @@ from app.services.time_tracking import (
     record_punch,
     run_auto_clock_outs,
 )
+from app.services.sync import sync_punch_batch
 from app.timezone_util import now_eastern
-from fastapi import Depends, Request
 
 router = APIRouter(prefix="/kiosk", tags=["kiosk"])
 
@@ -38,6 +39,18 @@ class PhotoPayload(BaseModel):
 
 class PunchBody(PinBody):
     photos: list[PhotoPayload] = Field(default_factory=list, max_length=3)
+    client_local_id: str | None = None
+
+
+class QueuedPunchPayload(BaseModel):
+    client_local_id: str
+    pin: str = Field(min_length=4, max_length=6)
+    occurred_at: str
+    photos: list[PhotoPayload] = Field(default_factory=list, max_length=3)
+
+
+class SyncBatchBody(BaseModel):
+    punches: list[QueuedPunchPayload] = Field(min_length=1)
 
 
 class KioskStateResponse(BaseModel):
@@ -104,6 +117,8 @@ async def kiosk_punch(
         staff_name=display_name,
         event_type=event_type,
         occurred_at=occurred_at,
+        client_local_id=body.client_local_id,
+        mark_synced=bool(body.client_local_id),
     )
 
     photos_saved = await save_punch_photos(
@@ -148,3 +163,32 @@ async def trigger_auto_clock_out(conn: DbConn) -> dict:
     """Manual trigger for tests and scheduled jobs."""
     results = await run_auto_clock_outs(conn, now_eastern())
     return {"closed": len(results), "events": [str(r.event_id) for r in results]}
+
+
+@router.post("/sync")
+async def kiosk_sync_batch(body: SyncBatchBody, conn: DbConn) -> dict:
+    """Replay offline punches in timestamp order; idempotent on client_local_id."""
+    punches = [p.model_dump() for p in body.punches]
+    result = await sync_punch_batch(conn, punches)
+    if result["failure_count"] > 0:
+        # Loud failure — HTTP 207-style body with explicit failures (D-020).
+        return {"status": "partial_failure", **result}
+    return {"status": "ok", **result}
+
+
+@router.get("/sync-failures")
+async def list_sync_failures(conn: DbConn, unresolved_only: bool = True) -> list[dict]:
+    """Unresolved sync failures for manager surfacing."""
+    settings = get_settings()
+    clause = "WHERE resolved = FALSE" if unresolved_only else ""
+    rows = await conn.fetch(
+        f"""
+        SELECT id, client_local_id, staff_id, error_message, payload, created_at, resolved
+        FROM {settings.db_schema}.sync_failures
+        {clause}
+        ORDER BY created_at DESC
+        LIMIT 100
+        """
+    )
+    return [dict(r) for r in rows]
+

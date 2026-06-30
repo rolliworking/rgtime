@@ -164,6 +164,43 @@ async def get_day_events(
     )
 
 
+async def get_punch_by_client_local_id(
+    conn: asyncpg.Connection, client_local_id: str
+) -> PunchResult | None:
+    settings = get_settings()
+    row = await conn.fetchrow(
+        f"""
+        SELECT id, event_type, occurred_at, work_date, is_late_arrival, late_minutes,
+               lunch_deducted_minutes, is_missing_clockout_flag
+        FROM {settings.db_schema}.time_events
+        WHERE client_local_id = $1
+        """,
+        client_local_id,
+    )
+    if row is None:
+        return None
+    local = row["occurred_at"].astimezone(TZ)
+    time_str = local.strftime("%I:%M %p").lstrip("0")
+    et = row["event_type"]
+    if et == "clock_in":
+        confirmation = f"Clocked in at {time_str}"
+    elif et == "auto_clock_out":
+        confirmation = f"Auto clocked out at {time_str} — flagged for manager review"
+    else:
+        confirmation = f"Clocked out at {time_str}"
+    return PunchResult(
+        event_id=row["id"],
+        event_type=et,
+        occurred_at=row["occurred_at"],
+        work_date=row["work_date"],
+        is_late_arrival=row["is_late_arrival"],
+        late_minutes=row["late_minutes"],
+        lunch_deducted_minutes=row["lunch_deducted_minutes"],
+        is_missing_clockout_flag=row["is_missing_clockout_flag"],
+        confirmation=confirmation,
+    )
+
+
 async def record_punch(
     conn: asyncpg.Connection,
     *,
@@ -172,8 +209,14 @@ async def record_punch(
     event_type: str,
     occurred_at: datetime,
     is_missing_clockout_flag: bool = False,
+    client_local_id: str | None = None,
+    mark_synced: bool = False,
 ) -> PunchResult:
     settings = get_settings()
+    if client_local_id:
+        existing = await get_punch_by_client_local_id(conn, client_local_id)
+        if existing is not None:
+            return existing
     # work_date is always the America/New_York calendar date of occurred_at (§3).
     work_date = work_date_for(occurred_at)
     schedule = await get_schedule(conn, staff_id)
@@ -204,9 +247,9 @@ async def record_punch(
         INSERT INTO {settings.db_schema}.time_events (
             staff_id, event_type, occurred_at, work_date,
             is_late_arrival, late_minutes, is_missing_clockout_flag,
-            lunch_deducted_minutes
+            lunch_deducted_minutes, client_local_id, synced_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id
         """,
         staff_id,
@@ -217,6 +260,8 @@ async def record_punch(
         late_minutes,
         is_missing_clockout_flag,
         lunch_deducted,
+        client_local_id,
+        datetime.now(TZ) if mark_synced or client_local_id else None,
     )
     assert row is not None
     event_id = row["id"]
