@@ -1,21 +1,31 @@
 # Python
 __pycache__/
+*.pyc
 *.py[cod]
 .venv/
 venv/
-.env
-*.egg-info/
 .pytest_cache/
 .mypy_cache/
+*.egg-info/
 
-# Node
+# Node / frontend
 node_modules/
 dist/
 build/
+.vite/
 *.local
 *.tsbuildinfo
 
-# Supabase
+# Env / secrets
+.env
+.env.*
+*.key
+*.pem
+
+# RG Time local data — DO NOT COMMIT
+backend/storage/            # punch photos (biometric data) + local blobs
+*.sqlite
+*.db
 supabase/.branches/
 supabase/.temp/
 
@@ -24,10 +34,3 @@ supabase/.temp/
 Thumbs.db
 .idea/
 .vscode/
-
-# Secrets
-.env.local
-.env.*.local
-
-# Punch photo storage
-backend/storage/
