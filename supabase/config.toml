@@ -1,0 +1,23 @@
+# RG Time — Supabase local config
+# https://supabase.com/docs/guides/cli/config
+
+project_id = "rgtime"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "rgtime"]
+extra_search_path = ["public", "rgtime"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.migrations]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
