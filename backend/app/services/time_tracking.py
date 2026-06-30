@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from datetime import date, datetime, time
 from uuid import UUID
 
 import asyncpg
@@ -13,7 +12,10 @@ from app.config import get_settings
 from app.timezone_util import TZ, combine_eastern, work_date_for
 
 LUNCH_DEDUCT_MINUTES = 30
-LATENESS_GRACE_MINUTES = 30
+# Lunch disambiguation (§2): clock_out→clock_in pairs with gap ≤ this many whole
+# minutes count as a lunch break. Longer gaps are leave-and-return re-entries.
+LUNCH_BREAK_MAX_GAP_MINUTES = 120
+LATENESS_FLAG_THRESHOLD_MINUTES = 31  # 30 min late is on-time; flag at 31+
 
 
 @dataclass
@@ -93,45 +95,55 @@ def next_event_type(last_event: asyncpg.Record | None) -> str:
     return "clock_out" if is_clocked_in(last_event) else "clock_in"
 
 
+def minutes_late_floor(clock_in: datetime, scheduled_start: datetime) -> int:
+    """Whole minutes late; seconds truncated before compare (locked §1)."""
+    delta = clock_in.astimezone(TZ) - scheduled_start.astimezone(TZ)
+    return max(0, int(delta.total_seconds() // 60))
+
+
 def compute_lateness(
     occurred_at: datetime,
     work_date: date,
     schedule: ScheduleInfo | None,
 ) -> tuple[bool, int | None]:
+    """Flag late only when minutes_late >= 31 (30 and under is on-time)."""
     if schedule is None:
         return False, None
-    local = occurred_at.astimezone(TZ)
     scheduled_start = combine_eastern(work_date, schedule.scheduled_start_time)
-    grace_end = scheduled_start + timedelta(minutes=LATENESS_GRACE_MINUTES)
-    if local <= grace_end:
+    minutes_late = minutes_late_floor(occurred_at, scheduled_start)
+    if minutes_late < LATENESS_FLAG_THRESHOLD_MINUTES:
         return False, None
-    late_minutes = int((local - scheduled_start).total_seconds() // 60)
-    return True, late_minutes
+    return True, minutes_late
+
+
+def gap_minutes_floor(earlier: datetime, later: datetime) -> int:
+    """Whole minutes between two timestamps; seconds truncated."""
+    delta = later.astimezone(TZ) - earlier.astimezone(TZ)
+    return max(0, int(delta.total_seconds() // 60))
+
+
+def is_lunch_break_pair(clock_out_at: datetime, clock_in_at: datetime) -> bool:
+    """
+    Duration heuristic (locked §2): a clock_out→clock_in pair is a lunch break
+    when the gap is > 0 and <= LUNCH_BREAK_MAX_GAP_MINUTES. Longer gaps are
+    treated as leave-and-return (evening re-entry), not lunch.
+    """
+    gap = gap_minutes_floor(clock_out_at, clock_in_at)
+    return 0 < gap <= LUNCH_BREAK_MAX_GAP_MINUTES
 
 
 def day_has_lunch_punch(events: list[asyncpg.Record]) -> bool:
-    """Lunch = intermediate clock_out immediately followed by clock_in."""
-    types = [e["event_type"] for e in events]
-    for i in range(len(types) - 1):
-        if types[i] == "clock_out" and types[i + 1] == "clock_in" and i > 0:
+    """True if any clock_out→clock_in pair qualifies as a lunch break."""
+    for i in range(len(events) - 1):
+        out_ev = events[i]
+        in_ev = events[i + 1]
+        if out_ev["event_type"] != "clock_out":
+            continue
+        if in_ev["event_type"] != "clock_in":
+            continue
+        if is_lunch_break_pair(out_ev["occurred_at"], in_ev["occurred_at"]):
             return True
     return False
-
-
-def compute_lunch_deduction(events: list[asyncpg.Record], closing_type: str) -> int:
-    """Apply 30-min deduction when day closes without a lunch punch pair."""
-    if closing_type not in ("clock_out", "auto_clock_out"):
-        return 0
-    if not events:
-        return 0
-    if day_has_lunch_punch(events):
-        return 0
-    # At least one full in-out segment without lunch break recorded.
-    ins = sum(1 for e in events if e["event_type"] == "clock_in")
-    outs = sum(1 for e in events if e["event_type"] in ("clock_out", "auto_clock_out"))
-    if ins >= 1 and outs >= 1:
-        return LUNCH_DEDUCT_MINUTES
-    return 0
 
 
 async def get_day_events(
@@ -162,12 +174,14 @@ async def record_punch(
     is_missing_clockout_flag: bool = False,
 ) -> PunchResult:
     settings = get_settings()
+    # work_date is always the America/New_York calendar date of occurred_at (§3).
     work_date = work_date_for(occurred_at)
     schedule = await get_schedule(conn, staff_id)
 
     is_late = False
     late_minutes: int | None = None
     if event_type == "clock_in":
+        # Lateness applies only to the first clock_in on this work_date (§3).
         prior_ins = await get_day_events(conn, staff_id, work_date)
         is_first_clock_in = not any(e["event_type"] == "clock_in" for e in prior_ins)
         if is_first_clock_in:
