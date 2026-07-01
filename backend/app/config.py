@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres@127.0.0.1:5432/postgres"
     db_schema: str = "rgtime"
     timezone: str = "America/New_York"
+    portal_admin_token: str = ""
 
 
 @lru_cache

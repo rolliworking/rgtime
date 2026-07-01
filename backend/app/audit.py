@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +19,12 @@ def _json_safe(value: Any) -> Any:
     if value is None:
         return None
     if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, time):
+        return value.isoformat()
+    if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}

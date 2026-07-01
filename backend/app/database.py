@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     from app.routers import kiosk as kiosk_router
+    from app.routers import portal as portal_router
 
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -39,4 +40,5 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(config_router.router, prefix="/api/v1")
     app.include_router(kiosk_router.router, prefix="/api/v1")
+    app.include_router(portal_router.router, prefix="/api/v1")
     return app
