@@ -18,9 +18,11 @@ from app.audit import write_audit_log
 from app.config import get_settings
 from app.pto_rates import (
     QUALIFYING_HOURS_THRESHOLD,
-    rate_for_tenure_years,
+    PtoOffer,
+    resolve_pto_rate,
     tenure_years_on_date,
 )
+from app.services.pto_ladder import get_ladder_for_work_date
 from app.services.time_tracking import get_day_events
 from app.timezone_util import TZ
 
@@ -50,10 +52,17 @@ def accrual_for_day(
     work_date: date,
     hours_worked: Decimal,
     counts_as_worked: bool,
+    offer: PtoOffer | None = None,
+    ladder=None,
 ) -> DayAccrualResult:
     """Pure accrual math for one calendar day."""
-    tenure = tenure_years_on_date(hire_date, work_date)
-    rate = rate_for_tenure_years(tenure)
+    offer = offer or PtoOffer()
+    rate, tenure = resolve_pto_rate(
+        hire_date=hire_date,
+        work_date=work_date,
+        offer=offer,
+        ladder=ladder,
+    )
     qualifying = counts_as_worked and hours_worked >= QUALIFYING_HOURS_THRESHOLD
     accrual = rate if qualifying else Decimal("0.000")
     return DayAccrualResult(
@@ -143,6 +152,23 @@ async def get_current_balance(conn: asyncpg.Connection, staff_id: UUID) -> Decim
     return Decimal(str(row["pto_balance"])).quantize(TWOPLACES)
 
 
+def staff_row_to_offer(row: asyncpg.Record | dict) -> PtoOffer:
+    return PtoOffer(
+        offer_type=row.get("pto_offer_type") or "default",
+        tenure_credit_years=row.get("pto_tenure_credit_years"),
+        custom_annual_hours=(
+            Decimal(str(row["pto_custom_annual_hours"]))
+            if row.get("pto_custom_annual_hours") is not None
+            else None
+        ),
+        custom_daily_rate=(
+            Decimal(str(row["pto_custom_daily_rate"]))
+            if row.get("pto_custom_daily_rate") is not None
+            else None
+        ),
+    )
+
+
 async def accrue_for_date_range(
     conn: asyncpg.Connection,
     *,
@@ -152,6 +178,7 @@ async def accrue_for_date_range(
     end_date: date,
     actor_id: UUID | None = None,
     pay_period_start: date | None = None,
+    offer: PtoOffer | None = None,
 ) -> list[DayAccrualResult]:
     """
     Accrue PTO for each day in [start_date, end_date] inclusive.
@@ -160,6 +187,17 @@ async def accrue_for_date_range(
     settings = get_settings()
     results: list[DayAccrualResult] = []
     balance = await get_current_balance(conn, staff_id)
+
+    if offer is None:
+        staff_row = await conn.fetchrow(
+            f"""
+            SELECT pto_offer_type, pto_tenure_credit_years,
+                   pto_custom_annual_hours, pto_custom_daily_rate
+            FROM {settings.db_schema}.staff WHERE id = $1
+            """,
+            staff_id,
+        )
+        offer = staff_row_to_offer(staff_row) if staff_row else PtoOffer()
 
     day = start_date
     while day <= end_date:
@@ -173,11 +211,14 @@ async def accrue_for_date_range(
         )
         if existing is None:
             inp = await get_day_accrual_input(conn, staff_id, day)
+            ladder = await get_ladder_for_work_date(conn, day)
             result = accrual_for_day(
                 hire_date=hire_date,
                 work_date=day,
                 hours_worked=inp.hours_worked,
                 counts_as_worked=inp.counts_as_worked,
+                offer=offer,
+                ladder=ladder,
             )
             if result.accrual_hours > 0:
                 balance = (balance + result.accrual_hours).quantize(TWOPLACES)

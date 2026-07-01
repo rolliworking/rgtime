@@ -13,7 +13,17 @@ import asyncpg
 from app.audit import write_audit_log
 from app.config import get_settings
 from app.pin import hash_pin, validate_pin_format
-from app.pto_rates import PTO_ACCRUAL_TIERS, tenure_years_on_date
+from app.pto_rates import (
+    PTO_ACCRUAL_TIERS,
+    PtoOffer,
+    base_staff_code_from_name,
+    derive_annual_from_daily,
+    derive_daily_rate_from_annual,
+    resolve_pto_rate,
+    tier_for_tenure_years,
+    tenure_years_on_date,
+    effective_tenure_for_rate,
+)
 
 STAFF_CODE_PATTERN = re.compile(r"^[A-Z0-9]{1,16}$")
 
@@ -25,23 +35,46 @@ def validate_staff_code(code: str) -> str:
     return upper
 
 
-def tenure_info(hire_date: date, as_of: date | None = None) -> dict[str, Any]:
-    as_of = as_of or date.today()
-    years = tenure_years_on_date(hire_date, as_of)
-    tier = next(
-        (
-            t
-            for t in PTO_ACCRUAL_TIERS
-            if (t.max_years is None and years >= t.min_years)
-            or (t.max_years is not None and t.min_years <= years < t.max_years)
+def _offer_from_staff(d: dict[str, Any]) -> PtoOffer:
+    return PtoOffer(
+        offer_type=d.get("pto_offer_type") or "default",
+        tenure_credit_years=d.get("pto_tenure_credit_years"),
+        custom_annual_hours=(
+            Decimal(str(d["pto_custom_annual_hours"]))
+            if d.get("pto_custom_annual_hours") is not None
+            else None
         ),
-        PTO_ACCRUAL_TIERS[0],
+        custom_daily_rate=(
+            Decimal(str(d["pto_custom_daily_rate"]))
+            if d.get("pto_custom_daily_rate") is not None
+            else None
+        ),
     )
-    return {
+
+
+def tenure_info(hire_date: date, as_of: date | None = None, offer: PtoOffer | None = None) -> dict[str, Any]:
+    as_of = as_of or date.today()
+    offer = offer or PtoOffer()
+    years = tenure_years_on_date(hire_date, as_of)
+    rate, _ = resolve_pto_rate(hire_date=hire_date, work_date=as_of, offer=offer)
+    lookup_years = years
+    if offer.offer_type == "tenure_credit" and offer.tenure_credit_years is not None:
+        lookup_years = effective_tenure_for_rate(hire_date, as_of, offer.tenure_credit_years)
+    tier = tier_for_tenure_years(lookup_years)
+    info: dict[str, Any] = {
         "tenure_years": years,
         "tenure_label": tier.tenure_label,
-        "pto_rate_per_qualifying_day": str(tier.rate_per_qualifying_day),
+        "pto_rate_per_qualifying_day": str(rate),
+        "pto_offer_type": offer.offer_type,
     }
+    if offer.offer_type == "custom_rate":
+        if offer.custom_annual_hours is not None:
+            info["pto_custom_annual_hours"] = str(offer.custom_annual_hours)
+        if offer.custom_daily_rate is not None:
+            info["pto_custom_daily_rate"] = str(offer.custom_daily_rate)
+    elif offer.offer_type == "tenure_credit" and offer.tenure_credit_years is not None:
+        info["pto_tenure_credit_years"] = offer.tenure_credit_years
+    return info
 
 
 def _staff_row_to_dict(row: asyncpg.Record) -> dict[str, Any]:
@@ -58,9 +91,20 @@ def _staff_row_to_dict(row: asyncpg.Record) -> dict[str, Any]:
         d["terminated_at"] = d["terminated_at"].isoformat()
     if d.get("pto_balance") is not None:
         d["pto_balance"] = str(d["pto_balance"])
+    for key in (
+        "pto_offer_type",
+        "pto_tenure_credit_years",
+        "pto_custom_annual_hours",
+        "pto_custom_daily_rate",
+    ):
+        if key in d and d[key] is not None and key != "pto_offer_type":
+            if key == "pto_tenure_credit_years":
+                d[key] = int(d[key])
+            else:
+                d[key] = str(d[key])
     if d.get("hire_date"):
         hire = date.fromisoformat(d["hire_date"]) if isinstance(d["hire_date"], str) else d["hire_date"]
-        d.update(tenure_info(hire))
+        d.update(tenure_info(hire, offer=_offer_from_staff(d)))
     d["has_pin"] = bool(d.pop("has_pin", False))
     return d
 
@@ -94,6 +138,30 @@ async def get_staff(conn: asyncpg.Connection, staff_id: UUID) -> dict | None:
     return _staff_row_to_dict(row) if row else None
 
 
+async def suggest_staff_code(
+    conn: asyncpg.Connection,
+    *,
+    first_name: str,
+    last_name: str | None = None,
+) -> str:
+    """Suggest staff_code from name; append numeric suffix on collision."""
+    _ = last_name  # reserved for future multi-token codes
+    settings = get_settings()
+    base = base_staff_code_from_name(first_name)
+    candidate = base
+    suffix = 2
+    while True:
+        exists = await conn.fetchval(
+            f"SELECT 1 FROM {settings.db_schema}.staff WHERE staff_code = $1",
+            candidate,
+        )
+        if not exists:
+            return candidate
+        suffix_str = str(suffix)
+        candidate = f"{base[: 16 - len(suffix_str)]}{suffix_str}"
+        suffix += 1
+
+
 async def create_staff(
     conn: asyncpg.Connection,
     *,
@@ -103,17 +171,29 @@ async def create_staff(
     hire_date: date,
     auto_clock_out_cap: time = time(21, 0),
     face_check_enabled: bool = False,
+    pto_offer_type: str = "default",
+    pto_tenure_credit_years: int | None = None,
+    pto_custom_annual_hours: Decimal | None = None,
+    pto_custom_daily_rate: Decimal | None = None,
     actor_id: UUID | None = None,
 ) -> dict:
     settings = get_settings()
     code = validate_staff_code(staff_code)
+    _validate_pto_offer(
+        pto_offer_type,
+        pto_tenure_credit_years,
+        pto_custom_annual_hours,
+        pto_custom_daily_rate,
+    )
     row = await conn.fetchrow(
         f"""
         INSERT INTO {settings.db_schema}.staff (
             staff_code, first_name, last_name, hire_date,
-            auto_clock_out_cap, face_check_enabled
+            auto_clock_out_cap, face_check_enabled,
+            pto_offer_type, pto_tenure_credit_years,
+            pto_custom_annual_hours, pto_custom_daily_rate
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         """,
         code,
@@ -122,6 +202,10 @@ async def create_staff(
         hire_date,
         auto_clock_out_cap,
         face_check_enabled,
+        pto_offer_type,
+        pto_tenure_credit_years,
+        pto_custom_annual_hours,
+        pto_custom_daily_rate,
     )
     if row is None:
         raise RuntimeError("staff insert failed")
@@ -254,6 +338,92 @@ async def terminate_staff(
         actor_id=actor_id,
         old_values=old,
         new_values=new,
+    )
+    return new
+
+
+def _validate_pto_offer(
+    offer_type: str,
+    tenure_credit_years: int | None,
+    custom_annual_hours: Decimal | None,
+    custom_daily_rate: Decimal | None,
+) -> None:
+    if offer_type == "default":
+        return
+    if offer_type == "tenure_credit":
+        if tenure_credit_years is None or tenure_credit_years < 0:
+            raise ValueError("tenure_credit requires pto_tenure_credit_years >= 0")
+        return
+    if offer_type == "custom_rate":
+        if custom_annual_hours is None and custom_daily_rate is None:
+            raise ValueError("custom_rate requires annual hours or daily rate")
+        return
+    raise ValueError("pto_offer_type must be default, tenure_credit, or custom_rate")
+
+
+async def set_pto_offer(
+    conn: asyncpg.Connection,
+    *,
+    staff_id: UUID,
+    pto_offer_type: str,
+    pto_tenure_credit_years: int | None = None,
+    pto_custom_annual_hours: Decimal | None = None,
+    pto_custom_daily_rate: Decimal | None = None,
+    actor_id: UUID | None = None,
+) -> dict | None:
+    """Update per-person PTO offer with audit log."""
+    if pto_offer_type == "custom_rate":
+        if pto_custom_daily_rate is None and pto_custom_annual_hours is not None:
+            pto_custom_daily_rate = derive_daily_rate_from_annual(pto_custom_annual_hours)
+        elif pto_custom_annual_hours is None and pto_custom_daily_rate is not None:
+            pto_custom_annual_hours = derive_annual_from_daily(pto_custom_daily_rate)
+    _validate_pto_offer(
+        pto_offer_type,
+        pto_tenure_credit_years,
+        pto_custom_annual_hours,
+        pto_custom_daily_rate,
+    )
+
+    settings = get_settings()
+    old = await get_staff(conn, staff_id)
+    if old is None:
+        return None
+
+    await conn.execute(
+        f"""
+        UPDATE {settings.db_schema}.staff SET
+            pto_offer_type = $2,
+            pto_tenure_credit_years = $3,
+            pto_custom_annual_hours = $4,
+            pto_custom_daily_rate = $5
+        WHERE id = $1
+        """,
+        staff_id,
+        pto_offer_type,
+        pto_tenure_credit_years if pto_offer_type == "tenure_credit" else None,
+        pto_custom_annual_hours if pto_offer_type == "custom_rate" else None,
+        pto_custom_daily_rate if pto_offer_type == "custom_rate" else None,
+    )
+    new = await get_staff(conn, staff_id)
+    await write_audit_log(
+        conn,
+        actor_type="admin",
+        action="set_pto_offer",
+        table_name="staff",
+        record_id=staff_id,
+        actor_id=actor_id,
+        old_values={
+            "pto_offer_type": old.get("pto_offer_type"),
+            "pto_tenure_credit_years": old.get("pto_tenure_credit_years"),
+            "pto_custom_annual_hours": old.get("pto_custom_annual_hours"),
+            "pto_custom_daily_rate": old.get("pto_custom_daily_rate"),
+        },
+        new_values={
+            "pto_offer_type": new.get("pto_offer_type") if new else None,
+            "pto_tenure_credit_years": new.get("pto_tenure_credit_years") if new else None,
+            "pto_custom_annual_hours": new.get("pto_custom_annual_hours") if new else None,
+            "pto_custom_daily_rate": new.get("pto_custom_daily_rate") if new else None,
+        },
     )
     return new
 

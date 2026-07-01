@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, time
+from decimal import Decimal
 from uuid import UUID
 
 import asyncpg
@@ -13,6 +14,13 @@ from app.dependencies import DbConn, get_actor_type
 from app.portal_auth import require_portal_auth
 from app.services.absence_reasons import create_reason, list_reasons, update_reason
 from app.services.face_reference import save_face_reference
+from app.services.offer_templates import create_template, get_template, list_templates
+from app.services.pto_ladder import (
+    get_active_ladder,
+    list_ladder_versions,
+    sync_annual_and_rate,
+    upsert_ladder_tier,
+)
 from app.services.schedules import (
     create_preset,
     get_staff_schedule,
@@ -24,7 +32,9 @@ from app.services.staff import (
     create_staff,
     get_staff,
     list_staff,
+    set_pto_offer,
     set_staff_pin,
+    suggest_staff_code,
     terminate_staff,
     update_staff,
 )
@@ -43,6 +53,12 @@ class StaffCreateBody(BaseModel):
     hire_date: date
     auto_clock_out_cap: str = "21:00:00"
     face_check_enabled: bool = False
+    pto_offer_type: str = "default"
+    pto_tenure_credit_years: int | None = None
+    pto_custom_annual_hours: str | None = None
+    pto_custom_daily_rate: str | None = None
+    save_offer_template: bool = False
+    offer_template_name: str | None = None
 
 
 class StaffUpdateBody(BaseModel):
@@ -51,6 +67,34 @@ class StaffUpdateBody(BaseModel):
     hire_date: date | None = None
     auto_clock_out_cap: str | None = None
     face_check_enabled: bool | None = None
+
+
+class PtoOfferBody(BaseModel):
+    pto_offer_type: str
+    pto_tenure_credit_years: int | None = None
+    pto_custom_annual_hours: str | None = None
+    pto_custom_daily_rate: str | None = None
+    template_id: UUID | None = None
+    save_as_template: bool = False
+    template_name: str | None = None
+
+
+class OfferTemplateCreateBody(BaseModel):
+    name: str
+    offer_type: str
+    tenure_credit_years: int | None = None
+    pto_custom_annual_hours: str | None = None
+    pto_custom_daily_rate: str | None = None
+
+
+class LadderTierUpdateBody(BaseModel):
+    min_years: int
+    max_years: int | None = None
+    tier_label: str
+    annual_pto_hours: int | None = None
+    rate_per_qualifying_day: str | None = None
+    effective_from: date
+    confirmed: bool = False
 
 
 class PinBody(BaseModel):
@@ -103,6 +147,49 @@ def _parse_time(value: str) -> time:
     return time(h, m, s)
 
 
+    return time(h, m, s)
+
+
+def _optional_decimal(value: str | None) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(value)
+
+
+async def _resolve_offer_from_body(
+    conn: asyncpg.Connection,
+    body: PtoOfferBody,
+) -> tuple[str, int | None, Decimal | None, Decimal | None]:
+    if body.template_id is not None:
+        tpl = await get_template(conn, body.template_id)
+        if tpl is None:
+            raise HTTPException(status_code=404, detail="template not found")
+        if tpl["offer_type"] == "tenure_credit":
+            return "tenure_credit", tpl["tenure_credit_years"], None, None
+        return (
+            "custom_rate",
+            None,
+            Decimal(str(tpl["custom_annual_hours"])) if tpl.get("custom_annual_hours") else None,
+            Decimal(str(tpl["custom_daily_rate"])) if tpl.get("custom_daily_rate") else None,
+        )
+    return (
+        body.pto_offer_type,
+        body.pto_tenure_credit_years,
+        _optional_decimal(body.pto_custom_annual_hours),
+        _optional_decimal(body.pto_custom_daily_rate),
+    )
+
+
+@router.get("/staff/suggest-code")
+async def portal_suggest_staff_code(
+    conn: DbConn,
+    first_name: str,
+    last_name: str = "",
+) -> dict:
+    code = await suggest_staff_code(conn, first_name=first_name, last_name=last_name)
+    return {"staff_code": code}
+
+
 @router.get("/staff")
 async def portal_list_staff(
     conn: DbConn,
@@ -127,7 +214,20 @@ async def portal_create_staff(
             hire_date=body.hire_date,
             auto_clock_out_cap=_parse_time(body.auto_clock_out_cap),
             face_check_enabled=body.face_check_enabled,
+            pto_offer_type=body.pto_offer_type,
+            pto_tenure_credit_years=body.pto_tenure_credit_years,
+            pto_custom_annual_hours=_optional_decimal(body.pto_custom_annual_hours),
+            pto_custom_daily_rate=_optional_decimal(body.pto_custom_daily_rate),
         )
+        if body.save_offer_template and body.offer_template_name and body.pto_offer_type != "default":
+            await create_template(
+                conn,
+                name=body.offer_template_name,
+                offer_type=body.pto_offer_type,
+                tenure_credit_years=body.pto_tenure_credit_years,
+                custom_annual_hours=_optional_decimal(body.pto_custom_annual_hours),
+                custom_daily_rate=_optional_decimal(body.pto_custom_daily_rate),
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except asyncpg.UniqueViolationError as e:
@@ -166,6 +266,99 @@ async def portal_update_staff(
     if staff is None:
         raise HTTPException(status_code=404, detail="staff not found")
     return staff
+
+
+@router.put("/staff/{staff_id}/pto-offer")
+async def portal_set_pto_offer(
+    staff_id: UUID,
+    body: PtoOfferBody,
+    conn: DbConn,
+) -> dict:
+    try:
+        offer_type, credit, annual, daily = await _resolve_offer_from_body(conn, body)
+        staff = await set_pto_offer(
+            conn,
+            staff_id=staff_id,
+            pto_offer_type=offer_type,
+            pto_tenure_credit_years=credit,
+            pto_custom_annual_hours=annual,
+            pto_custom_daily_rate=daily,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if staff is None:
+        raise HTTPException(status_code=404, detail="staff not found")
+    if body.save_as_template and body.template_name and offer_type != "default":
+        await create_template(
+            conn,
+            name=body.template_name,
+            offer_type=offer_type,
+            tenure_credit_years=credit,
+            custom_annual_hours=annual,
+            custom_daily_rate=daily,
+        )
+    return staff
+
+
+@router.get("/offer-templates")
+async def portal_list_offer_templates(conn: DbConn) -> dict:
+    return {"templates": await list_templates(conn)}
+
+
+@router.post("/offer-templates", status_code=201)
+async def portal_create_offer_template(
+    body: OfferTemplateCreateBody,
+    conn: DbConn,
+) -> dict:
+    try:
+        return await create_template(
+            conn,
+            name=body.name,
+            offer_type=body.offer_type,
+            tenure_credit_years=body.tenure_credit_years,
+            custom_annual_hours=_optional_decimal(body.pto_custom_annual_hours),
+            custom_daily_rate=_optional_decimal(body.pto_custom_daily_rate),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except asyncpg.UniqueViolationError as e:
+        raise HTTPException(status_code=409, detail="template name already exists") from e
+
+
+@router.get("/pto-ladder")
+async def portal_get_pto_ladder(conn: DbConn) -> dict:
+    return {
+        "active": await get_active_ladder(conn),
+        "history": await list_ladder_versions(conn),
+    }
+
+
+@router.put("/pto-ladder")
+async def portal_update_pto_ladder(
+    body: LadderTierUpdateBody,
+    conn: DbConn,
+) -> dict:
+    try:
+        annual, rate = sync_annual_and_rate(
+            annual_pto_hours=body.annual_pto_hours,
+            rate_per_qualifying_day=(
+                Decimal(body.rate_per_qualifying_day)
+                if body.rate_per_qualifying_day
+                else None
+            ),
+        )
+        return await upsert_ladder_tier(
+            conn,
+            min_years=body.min_years,
+            max_years=body.max_years,
+            tier_label=body.tier_label,
+            annual_pto_hours=annual,
+            rate_per_qualifying_day=rate,
+            effective_from=body.effective_from,
+            confirmed=body.confirmed,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/staff/{staff_id}/terminate")

@@ -56,6 +56,29 @@ export interface Staff {
   tenure_years: number;
   tenure_label: string;
   pto_rate_per_qualifying_day: string;
+  pto_offer_type?: string;
+  pto_tenure_credit_years?: number | null;
+  pto_custom_annual_hours?: string | null;
+  pto_custom_daily_rate?: string | null;
+}
+
+export interface OfferTemplate {
+  id: string;
+  name: string;
+  offer_type: string;
+  tenure_credit_years?: number | null;
+  custom_annual_hours?: string | null;
+  custom_daily_rate?: string | null;
+}
+
+export interface PtoLadderTier {
+  id?: string;
+  tier_label: string;
+  min_years: number;
+  max_years: number | null;
+  annual_pto_hours: number;
+  rate_per_qualifying_day: string;
+  effective_from: string;
 }
 
 export interface SchedulePreset {
@@ -96,7 +119,48 @@ export const api = {
     hire_date: string;
     auto_clock_out_cap?: string;
     face_check_enabled?: boolean;
+    pto_offer_type?: string;
+    pto_tenure_credit_years?: number;
+    pto_custom_annual_hours?: string;
+    pto_custom_daily_rate?: string;
+    save_offer_template?: boolean;
+    offer_template_name?: string;
   }) => request<Staff>("/portal/staff", { method: "POST", body: JSON.stringify(body) }),
+
+  suggestStaffCode: (first_name: string, last_name = "") =>
+    request<{ staff_code: string }>(
+      `/portal/staff/suggest-code?first_name=${encodeURIComponent(first_name)}&last_name=${encodeURIComponent(last_name)}`
+    ),
+
+  setPtoOffer: (
+    id: string,
+    body: {
+      pto_offer_type: string;
+      pto_tenure_credit_years?: number;
+      pto_custom_annual_hours?: string;
+      pto_custom_daily_rate?: string;
+      template_id?: string;
+      save_as_template?: boolean;
+      template_name?: string;
+    }
+  ) =>
+    request<Staff>(`/portal/staff/${id}/pto-offer`, { method: "PUT", body: JSON.stringify(body) }),
+
+  listOfferTemplates: () => request<{ templates: OfferTemplate[] }>("/portal/offer-templates"),
+
+  getPtoLadder: () =>
+    request<{ active: PtoLadderTier[]; history: PtoLadderTier[] }>("/portal/pto-ladder"),
+
+  updatePtoLadder: (body: {
+    min_years: number;
+    max_years: number | null;
+    tier_label: string;
+    annual_pto_hours?: number;
+    rate_per_qualifying_day?: string;
+    effective_from: string;
+    confirmed: boolean;
+  }) =>
+    request<PtoLadderTier>("/portal/pto-ladder", { method: "PUT", body: JSON.stringify(body) }),
 
   updateStaff: (id: string, body: Partial<Staff>) =>
     request<Staff>(`/portal/staff/${id}`, { method: "PUT", body: JSON.stringify(body) }),

@@ -1,10 +1,14 @@
 import { FormEvent, useEffect, useState } from "react";
-import { SchedulePreset, Staff, api } from "./api";
+import { OfferTemplate, SchedulePreset, Staff, api } from "./api";
 import { FaceEnrollment } from "./FaceEnrollment";
+
+type PtoOfferMode = "default" | "custom";
+type CustomOfferKind = "tenure_credit" | "custom_rate";
 
 export function StaffPage() {
   const [staff, setStaff] = useState<Staff[]>([]);
   const [presets, setPresets] = useState<SchedulePreset[]>([]);
+  const [templates, setTemplates] = useState<OfferTemplate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -17,11 +21,32 @@ export function StaffPage() {
   const [pin, setPin] = useState("");
   const [presetId, setPresetId] = useState("");
 
+  const [offerMode, setOfferMode] = useState<PtoOfferMode>("default");
+  const [customKind, setCustomKind] = useState<CustomOfferKind>("tenure_credit");
+  const [tenureCredit, setTenureCredit] = useState("3");
+  const [annualHours, setAnnualHours] = useState("80");
+  const [dailyRate, setDailyRate] = useState("");
+  const [saveTemplate, setSaveTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+
+  const [editOfferMode, setEditOfferMode] = useState<PtoOfferMode>("default");
+  const [editCustomKind, setEditCustomKind] = useState<CustomOfferKind>("tenure_credit");
+  const [editTenureCredit, setEditTenureCredit] = useState("0");
+  const [editAnnualHours, setEditAnnualHours] = useState("");
+  const [editDailyRate, setEditDailyRate] = useState("");
+  const [editTemplateId, setEditTemplateId] = useState("");
+
   const load = async () => {
     try {
-      const [staffRes, presetRes] = await Promise.all([api.listStaff(true), api.listPresets()]);
+      const [staffRes, presetRes, tplRes] = await Promise.all([
+        api.listStaff(true),
+        api.listPresets(),
+        api.listOfferTemplates(),
+      ]);
       setStaff(staffRes.staff);
       setPresets(presetRes.presets);
+      setTemplates(tplRes.templates);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Load failed");
     }
@@ -30,6 +55,40 @@ export function StaffPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const suggestCode = async (name: string) => {
+    if (!name.trim()) return;
+    try {
+      const res = await api.suggestStaffCode(name, lastName);
+      setCode(res.staff_code);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  useEffect(() => {
+    if (showCreate && firstName.trim()) {
+      const t = setTimeout(() => suggestCode(firstName), 300);
+      return () => clearTimeout(t);
+    }
+  }, [firstName, lastName, showCreate]);
+
+  const ptoPayload = () => {
+    if (offerMode === "default") {
+      return { pto_offer_type: "default" as const };
+    }
+    if (customKind === "tenure_credit") {
+      return {
+        pto_offer_type: "tenure_credit" as const,
+        pto_tenure_credit_years: Number(tenureCredit),
+      };
+    }
+    return {
+      pto_offer_type: "custom_rate" as const,
+      pto_custom_annual_hours: annualHours || undefined,
+      pto_custom_daily_rate: dailyRate || undefined,
+    };
+  };
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -41,6 +100,9 @@ export function StaffPage() {
         first_name: firstName,
         last_name: lastName,
         hire_date: hireDate,
+        ...ptoPayload(),
+        save_offer_template: saveTemplate && offerMode === "custom",
+        offer_template_name: templateName || undefined,
       });
       if (presetId) {
         await api.setSchedule(created.id, { preset_id: presetId });
@@ -59,6 +121,33 @@ export function StaffPage() {
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
+    }
+  };
+
+  const onSavePtoOffer = async () => {
+    if (!selectedId) return;
+    setError(null);
+    try {
+      if (editTemplateId) {
+        await api.setPtoOffer(selectedId, { pto_offer_type: "default", template_id: editTemplateId });
+      } else if (editOfferMode === "default") {
+        await api.setPtoOffer(selectedId, { pto_offer_type: "default" });
+      } else if (editCustomKind === "tenure_credit") {
+        await api.setPtoOffer(selectedId, {
+          pto_offer_type: "tenure_credit",
+          pto_tenure_credit_years: Number(editTenureCredit),
+        });
+      } else {
+        await api.setPtoOffer(selectedId, {
+          pto_offer_type: "custom_rate",
+          pto_custom_annual_hours: editAnnualHours || undefined,
+          pto_custom_daily_rate: editDailyRate || undefined,
+        });
+      }
+      setSuccess("PTO offer updated");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PTO offer update failed");
     }
   };
 
@@ -87,11 +176,26 @@ export function StaffPage() {
 
   const selected = staff.find((s) => s.id === selectedId);
 
+  useEffect(() => {
+    if (!selected) return;
+    const t = selected.pto_offer_type ?? "default";
+    if (t === "default") {
+      setEditOfferMode("default");
+    } else {
+      setEditOfferMode("custom");
+      setEditCustomKind(t === "tenure_credit" ? "tenure_credit" : "custom_rate");
+      setEditTenureCredit(String(selected.pto_tenure_credit_years ?? 0));
+      setEditAnnualHours(selected.pto_custom_annual_hours ?? "");
+      setEditDailyRate(selected.pto_custom_daily_rate ?? "");
+    }
+    setEditTemplateId("");
+  }, [selectedId, selected?.pto_offer_type]);
+
   return (
     <div>
       <div className="page-header">
         <h2>Staff</h2>
-        <p>Onboard staff — code, hire date, schedule, PIN, face reference</p>
+        <p>Onboard staff — code, hire date, PTO offer, schedule, PIN, face reference</p>
       </div>
       {error && <div className="error-banner">{error}</div>}
       {success && <div className="success-banner">{success}</div>}
@@ -107,16 +211,16 @@ export function StaffPage() {
           <h3>New staff member</h3>
           <div className="form-grid">
             <div className="form-field">
-              <label>Staff code</label>
-              <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={16} required />
-            </div>
-            <div className="form-field">
               <label>First name</label>
               <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
             </div>
             <div className="form-field">
               <label>Last name</label>
               <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
+            </div>
+            <div className="form-field">
+              <label>Staff code (suggested)</label>
+              <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={16} required />
             </div>
             <div className="form-field">
               <label>Hire date</label>
@@ -138,7 +242,105 @@ export function StaffPage() {
               <input value={pin} onChange={(e) => setPin(e.target.value)} pattern="\d{4,6}" maxLength={6} />
             </div>
           </div>
-          <button type="submit" className="btn btn-primary">
+
+          <fieldset className="card" style={{ marginTop: "1rem", border: "1px solid var(--border)" }}>
+            <legend>PTO Offer</legend>
+            <label style={{ display: "block", marginBottom: "0.5rem" }}>
+              <input
+                type="radio"
+                checked={offerMode === "default"}
+                onChange={() => setOfferMode("default")}
+              />{" "}
+              Default — standard tenure ladder
+            </label>
+            <label style={{ display: "block", marginBottom: "0.75rem" }}>
+              <input
+                type="radio"
+                checked={offerMode === "custom"}
+                onChange={() => setOfferMode("custom")}
+              />{" "}
+              Custom offer
+            </label>
+            {offerMode === "custom" && (
+              <div className="form-grid">
+                <div className="form-field">
+                  <label>Apply saved template</label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      setSelectedTemplateId(id);
+                      const tpl = templates.find((t) => t.id === id);
+                      if (!tpl) return;
+                      setOfferMode("custom");
+                      setCustomKind(tpl.offer_type as CustomOfferKind);
+                      if (tpl.offer_type === "tenure_credit") {
+                        setTenureCredit(String(tpl.tenure_credit_years ?? 0));
+                      } else {
+                        setAnnualHours(tpl.custom_annual_hours ?? "");
+                        setDailyRate(tpl.custom_daily_rate ?? "");
+                      }
+                    }}
+                  >
+                    <option value="">— enter manually —</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-field">
+                  <label>Offer type</label>
+                  <select value={customKind} onChange={(e) => setCustomKind(e.target.value as CustomOfferKind)}>
+                    <option value="tenure_credit">Start at tenure tier N (credit years)</option>
+                    <option value="custom_rate">Custom rate / annual hours</option>
+                  </select>
+                </div>
+                {customKind === "tenure_credit" ? (
+                  <div className="form-field">
+                    <label>Tenure credit (years)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={tenureCredit}
+                      onChange={(e) => setTenureCredit(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="form-field">
+                      <label>Annual PTO hours</label>
+                      <input value={annualHours} onChange={(e) => setAnnualHours(e.target.value)} />
+                    </div>
+                    <div className="form-field">
+                      <label>Or per-day rate</label>
+                      <input value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} />
+                    </div>
+                  </>
+                )}
+                <div className="form-field">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={saveTemplate}
+                      onChange={(e) => setSaveTemplate(e.target.checked)}
+                    />{" "}
+                    Save as template
+                  </label>
+                  {saveTemplate && (
+                    <input
+                      placeholder="Template name"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+          </fieldset>
+
+          <button type="submit" className="btn btn-primary" style={{ marginTop: "1rem" }}>
             Create
           </button>
         </form>
@@ -152,6 +354,7 @@ export function StaffPage() {
               <th>Name</th>
               <th>Hire date</th>
               <th>Tenure</th>
+              <th>PTO offer</th>
               <th>PIN</th>
               <th>Status</th>
               <th></th>
@@ -168,6 +371,7 @@ export function StaffPage() {
                 <td>
                   <span className="badge">{s.tenure_label}</span>
                 </td>
+                <td>{s.pto_offer_type ?? "default"}</td>
                 <td>{s.has_pin ? "Set" : <span className="badge-warn">Missing</span>}</td>
                 <td>{s.is_active ? "Active" : "Terminated"}</td>
                 <td>
@@ -188,8 +392,79 @@ export function StaffPage() {
           </h3>
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
             Tenure: {selected.tenure_label} ({selected.tenure_years} yr) · PTO rate/day:{" "}
-            {selected.pto_rate_per_qualifying_day}
+            {selected.pto_rate_per_qualifying_day} · Offer: {selected.pto_offer_type ?? "default"}
           </p>
+
+          <fieldset className="card" style={{ marginTop: "1rem", border: "1px solid var(--border)" }}>
+            <legend>PTO Offer</legend>
+            <label style={{ display: "block", marginBottom: "0.5rem" }}>
+              <input
+                type="radio"
+                checked={editOfferMode === "default"}
+                onChange={() => setEditOfferMode("default")}
+              />{" "}
+              Default
+            </label>
+            <label style={{ display: "block", marginBottom: "0.75rem" }}>
+              <input
+                type="radio"
+                checked={editOfferMode === "custom"}
+                onChange={() => setEditOfferMode("custom")}
+              />{" "}
+              Custom
+            </label>
+            <div className="form-field" style={{ marginBottom: "0.75rem" }}>
+              <label>Apply saved template</label>
+              <select value={editTemplateId} onChange={(e) => setEditTemplateId(e.target.value)}>
+                <option value="">— none —</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {editOfferMode === "custom" && !editTemplateId && (
+              <div className="form-grid">
+                <div className="form-field">
+                  <label>Offer type</label>
+                  <select
+                    value={editCustomKind}
+                    onChange={(e) => setEditCustomKind(e.target.value as CustomOfferKind)}
+                  >
+                    <option value="tenure_credit">Tenure credit</option>
+                    <option value="custom_rate">Custom rate / annual</option>
+                  </select>
+                </div>
+                {editCustomKind === "tenure_credit" ? (
+                  <div className="form-field">
+                    <label>Credit years</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editTenureCredit}
+                      onChange={(e) => setEditTenureCredit(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="form-field">
+                      <label>Annual hours</label>
+                      <input value={editAnnualHours} onChange={(e) => setEditAnnualHours(e.target.value)} />
+                    </div>
+                    <div className="form-field">
+                      <label>Per-day rate</label>
+                      <input value={editDailyRate} onChange={(e) => setEditDailyRate(e.target.value)} />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <button type="button" className="btn btn-primary" onClick={onSavePtoOffer} style={{ marginTop: "0.5rem" }}>
+              Save PTO offer
+            </button>
+          </fieldset>
+
           <div className="form-actions">
             <button type="button" className="btn" onClick={() => onSetPin(selected.id)}>
               Set / reset PIN

@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,7 @@ class Settings(BaseSettings):
     db_schema: str = "rgtime"
     timezone: str = "America/New_York"
     portal_admin_token: str = ""
+    rgtime_to_rs_token: str = Field(default="", validation_alias="ROLLICLOCK_TO_RS_TOKEN")
 
 
 @lru_cache
