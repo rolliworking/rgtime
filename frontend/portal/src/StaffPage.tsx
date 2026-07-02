@@ -16,6 +16,7 @@ export function StaffPage() {
 
   const [code, setCode] = useState("");
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [hireDate, setHireDate] = useState("");
   const [pin, setPin] = useState("");
@@ -35,7 +36,7 @@ export function StaffPage() {
   const [editTenureCredit, setEditTenureCredit] = useState("0");
   const [editAnnualHours, setEditAnnualHours] = useState("");
   const [editDailyRate, setEditDailyRate] = useState("");
-  const [editTemplateId, setEditTemplateId] = useState("");
+  const [editMiddleName, setEditMiddleName] = useState("");
 
   const load = async () => {
     try {
@@ -56,10 +57,10 @@ export function StaffPage() {
     load();
   }, []);
 
-  const suggestCode = async (name: string) => {
-    if (!name.trim()) return;
+  const suggestCode = async (first: string, middle: string, last: string) => {
+    if (!first.trim() || !last.trim()) return;
     try {
-      const res = await api.suggestStaffCode(name, lastName);
+      const res = await api.suggestStaffCode(first, last, middle);
       setCode(res.staff_code);
     } catch {
       /* non-fatal */
@@ -67,11 +68,11 @@ export function StaffPage() {
   };
 
   useEffect(() => {
-    if (showCreate && firstName.trim()) {
-      const t = setTimeout(() => suggestCode(firstName), 300);
+    if (showCreate && firstName.trim() && lastName.trim()) {
+      const t = setTimeout(() => suggestCode(firstName, middleName, lastName), 300);
       return () => clearTimeout(t);
     }
-  }, [firstName, lastName, showCreate]);
+  }, [firstName, middleName, lastName, showCreate]);
 
   const ptoPayload = () => {
     if (offerMode === "default") {
@@ -98,6 +99,7 @@ export function StaffPage() {
       const created = await api.createStaff({
         staff_code: code,
         first_name: firstName,
+        middle_name: middleName.trim() || undefined,
         last_name: lastName,
         hire_date: hireDate,
         ...ptoPayload(),
@@ -115,6 +117,7 @@ export function StaffPage() {
       setSelectedId(created.id);
       setCode("");
       setFirstName("");
+      setMiddleName("");
       setLastName("");
       setHireDate("");
       setPin("");
@@ -174,6 +177,20 @@ export function StaffPage() {
     }
   };
 
+  const onSaveProfile = async () => {
+    if (!selectedId) return;
+    setError(null);
+    try {
+      await api.updateStaff(selectedId, { middle_name: editMiddleName.trim() || null });
+      setSuccess("Profile updated");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Profile update failed");
+    }
+  };
+
+  const staffLabel = (s: Staff) => s.display_name ?? `${s.first_name} ${s.last_name}`;
+
   const selected = staff.find((s) => s.id === selectedId);
 
   useEffect(() => {
@@ -189,7 +206,8 @@ export function StaffPage() {
       setEditDailyRate(selected.pto_custom_daily_rate ?? "");
     }
     setEditTemplateId("");
-  }, [selectedId, selected?.pto_offer_type]);
+    setEditMiddleName(selected.middle_name ?? "");
+  }, [selectedId, selected?.pto_offer_type, selected?.middle_name]);
 
   return (
     <div>
@@ -215,11 +233,15 @@ export function StaffPage() {
               <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
             </div>
             <div className="form-field">
+              <label>Middle name (optional)</label>
+              <input value={middleName} onChange={(e) => setMiddleName(e.target.value)} />
+            </div>
+            <div className="form-field">
               <label>Last name</label>
               <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
             </div>
             <div className="form-field">
-              <label>Staff code (suggested)</label>
+              <label>Staff code (suggested — editable)</label>
               <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={16} required />
             </div>
             <div className="form-field">
@@ -364,9 +386,7 @@ export function StaffPage() {
             {staff.map((s) => (
               <tr key={s.id} style={{ opacity: s.is_active ? 1 : 0.6 }}>
                 <td className="mono">{s.staff_code}</td>
-                <td>
-                  {s.first_name} {s.last_name}
-                </td>
+                <td>{staffLabel(s)}</td>
                 <td>{s.hire_date}</td>
                 <td>
                   <span className="badge">{s.tenure_label}</span>
@@ -388,8 +408,22 @@ export function StaffPage() {
       {selected && (
         <div className="card">
           <h3>
-            {selected.staff_code} — {selected.first_name} {selected.last_name}
+            {selected.staff_code} — {staffLabel(selected)}
           </h3>
+
+          <fieldset className="card" style={{ marginTop: "1rem", border: "1px solid var(--border)" }}>
+            <legend>Name</legend>
+            <div className="form-grid">
+              <div className="form-field">
+                <label>Middle name</label>
+                <input value={editMiddleName} onChange={(e) => setEditMiddleName(e.target.value)} />
+              </div>
+            </div>
+            <button type="button" className="btn" onClick={onSaveProfile} style={{ marginTop: "0.5rem" }}>
+              Save name
+            </button>
+          </fieldset>
+
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
             Tenure: {selected.tenure_label} ({selected.tenure_years} yr) · PTO rate/day:{" "}
             {selected.pto_rate_per_qualifying_day} · Offer: {selected.pto_offer_type ?? "default"}

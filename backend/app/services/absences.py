@@ -11,6 +11,7 @@ import asyncpg
 
 from app.audit import write_audit_log
 from app.config import get_settings
+from app.staff_names import format_display_name
 
 
 def _row_to_dict(row: asyncpg.Record) -> dict[str, Any]:
@@ -174,7 +175,7 @@ async def list_absences_in_range(
     rows = await conn.fetch(
         f"""
         SELECT a.*, r.name AS reason_name, r.funding, r.counts_as_worked,
-               s.staff_code, s.first_name, s.last_name
+               s.staff_code, s.first_name, s.middle_name, s.last_name
         FROM {settings.db_schema}.absences a
         JOIN {settings.db_schema}.absence_reasons r ON r.id = a.reason_id
         JOIN {settings.db_schema}.staff s ON s.id = a.staff_id
@@ -189,7 +190,14 @@ async def list_absences_in_range(
         d = _row_to_dict(row)
         d["staff_code"] = row["staff_code"]
         d["first_name"] = row["first_name"]
+        d["middle_name"] = row.get("middle_name")
         d["last_name"] = row["last_name"]
+        d["display_name_short"] = format_display_name(
+            row["first_name"],
+            row["last_name"],
+            middle_name=row.get("middle_name"),
+            short_middle=True,
+        )
         d["reason_name"] = row["reason_name"]
         d["funding"] = row["funding"]
         result.append(d)

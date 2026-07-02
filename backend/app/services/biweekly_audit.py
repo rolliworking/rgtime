@@ -11,6 +11,7 @@ from uuid import UUID
 import asyncpg
 
 from app.config import get_settings
+from app.staff_names import format_display_name
 from app.services.pay_period import PayPeriod, iter_dates, weeks_in_period
 from app.services.pto_accrual import compute_punched_hours
 
@@ -31,6 +32,7 @@ class StaffPeriodAudit:
     staff_code: str
     first_name: str
     last_name: str
+    middle_name: str | None = None
     pay_period_start: date
     pay_period_end: date
     week1_hours: Decimal
@@ -52,6 +54,18 @@ class StaffPeriodAudit:
             "staff_code": self.staff_code,
             "first_name": self.first_name,
             "last_name": self.last_name,
+            "middle_name": self.middle_name,
+            "display_name": format_display_name(
+                self.first_name,
+                self.last_name,
+                middle_name=self.middle_name,
+            ),
+            "display_name_short": format_display_name(
+                self.first_name,
+                self.last_name,
+                middle_name=self.middle_name,
+                short_middle=True,
+            ),
             "pay_period_start": self.pay_period_start.isoformat(),
             "pay_period_end": self.pay_period_end.isoformat(),
             "week1_hours": str(self.week1_hours),
@@ -113,7 +127,7 @@ async def audit_staff_period(
     settings = get_settings()
     staff = await conn.fetchrow(
         f"""
-        SELECT id, staff_code, first_name, last_name, pto_balance
+        SELECT id, staff_code, first_name, middle_name, last_name, pto_balance
         FROM {settings.db_schema}.staff WHERE id = $1
         """,
         staff_id,
@@ -130,6 +144,7 @@ async def audit_staff_period(
         staff_code=staff["staff_code"],
         first_name=staff["first_name"],
         last_name=staff["last_name"],
+        middle_name=staff.get("middle_name"),
         pay_period_start=period.start_date,
         pay_period_end=period.end_date,
         week1_hours=w1,

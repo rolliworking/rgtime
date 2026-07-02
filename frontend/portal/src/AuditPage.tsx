@@ -139,7 +139,7 @@ export function AuditPage() {
                   <tr key={s.staff_id}>
                     <td className="mono">{s.staff_code}</td>
                     <td>
-                      {s.first_name} {s.last_name}
+                      {s.display_name ?? `${s.first_name} ${s.last_name}`}
                     </td>
                     <td>{s.week1_hours}</td>
                     <td>{s.week2_hours}</td>
@@ -173,7 +173,7 @@ export function AuditPage() {
                   <tr key={s.staff_id}>
                     <td className="mono">{s.staff_code}</td>
                     <td>
-                      {s.first_name} {s.last_name}
+                      {s.display_name ?? `${s.first_name} ${s.last_name}`}
                     </td>
                     <td>{s.week1_hours}</td>
                     <td>{s.week2_hours}</td>
@@ -201,7 +201,7 @@ export function AuditPage() {
       {selected && (
         <div className="card">
           <h3>
-            {selected.staff_code} — {selected.first_name} {selected.last_name}
+            {selected.staff_code} — {selected.display_name ?? `${selected.first_name} ${selected.last_name}`}
           </h3>
           <ul style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>
             {selected.flags.map((f) => (

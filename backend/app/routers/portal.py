@@ -62,6 +62,7 @@ router = APIRouter(
 class StaffCreateBody(BaseModel):
     staff_code: str = Field(max_length=16)
     first_name: str
+    middle_name: str | None = None
     last_name: str
     hire_date: date
     auto_clock_out_cap: str = "21:00:00"
@@ -76,6 +77,7 @@ class StaffCreateBody(BaseModel):
 
 class StaffUpdateBody(BaseModel):
     first_name: str | None = None
+    middle_name: str | None = None
     last_name: str | None = None
     hire_date: date | None = None
     auto_clock_out_cap: str | None = None
@@ -195,9 +197,6 @@ def _parse_time(value: str) -> time:
     return time(h, m, s)
 
 
-    return time(h, m, s)
-
-
 def _optional_decimal(value: str | None) -> Decimal | None:
     if value is None or value == "":
         return None
@@ -233,8 +232,14 @@ async def portal_suggest_staff_code(
     conn: DbConn,
     first_name: str,
     last_name: str = "",
+    middle_name: str = "",
 ) -> dict:
-    code = await suggest_staff_code(conn, first_name=first_name, last_name=last_name)
+    code = await suggest_staff_code(
+        conn,
+        first_name=first_name,
+        last_name=last_name,
+        middle_name=middle_name or None,
+    )
     return {"staff_code": code}
 
 
@@ -258,6 +263,7 @@ async def portal_create_staff(
             conn,
             staff_code=body.staff_code,
             first_name=body.first_name,
+            middle_name=body.middle_name,
             last_name=body.last_name,
             hire_date=body.hire_date,
             auto_clock_out_cap=_parse_time(body.auto_clock_out_cap),
@@ -300,14 +306,17 @@ async def portal_update_staff(
 ) -> dict:
     try:
         cap = _parse_time(body.auto_clock_out_cap) if body.auto_clock_out_cap else None
+        fields_set = body.model_fields_set
         staff = await update_staff(
             conn,
             staff_id=staff_id,
             first_name=body.first_name,
+            middle_name=body.middle_name,
             last_name=body.last_name,
             hire_date=body.hire_date,
             auto_clock_out_cap=cap,
             face_check_enabled=body.face_check_enabled,
+            update_middle_name="middle_name" in fields_set,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

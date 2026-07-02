@@ -44,7 +44,10 @@ export interface Staff {
   id: string;
   staff_code: string;
   first_name: string;
+  middle_name?: string | null;
   last_name: string;
+  display_name?: string;
+  display_name_short?: string;
   hire_date: string;
   face_check_enabled: boolean;
   face_reference_photo_path: string | null;
@@ -121,7 +124,9 @@ export interface CalendarAbsence {
   staff_id: string;
   staff_code: string;
   first_name: string;
+  middle_name?: string | null;
   last_name: string;
+  display_name_short?: string;
   absence_date: string;
   reason_id: string;
   reason_name: string;
@@ -133,7 +138,10 @@ export interface AuditStaffPeriod {
   staff_id: string;
   staff_code: string;
   first_name: string;
+  middle_name?: string | null;
   last_name: string;
+  display_name?: string;
+  display_name_short?: string;
   pay_period_start: string;
   pay_period_end: string;
   week1_hours: string;
@@ -177,6 +185,7 @@ export const api = {
   createStaff: (body: {
     staff_code: string;
     first_name: string;
+    middle_name?: string;
     last_name: string;
     hire_date: string;
     auto_clock_out_cap?: string;
@@ -189,9 +198,12 @@ export const api = {
     offer_template_name?: string;
   }) => request<Staff>("/portal/staff", { method: "POST", body: JSON.stringify(body) }),
 
-  suggestStaffCode: (first_name: string, last_name = "") =>
+  updateStaff: (id: string, body: Partial<Staff>) =>
+    request<Staff>(`/portal/staff/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+
+  suggestStaffCode: (first_name: string, last_name = "", middle_name = "") =>
     request<{ staff_code: string }>(
-      `/portal/staff/suggest-code?first_name=${encodeURIComponent(first_name)}&last_name=${encodeURIComponent(last_name)}`
+      `/portal/staff/suggest-code?first_name=${encodeURIComponent(first_name)}&last_name=${encodeURIComponent(last_name)}&middle_name=${encodeURIComponent(middle_name)}`
     ),
 
   setPtoOffer: (
@@ -223,9 +235,6 @@ export const api = {
     confirmed: boolean;
   }) =>
     request<PtoLadderTier>("/portal/pto-ladder", { method: "PUT", body: JSON.stringify(body) }),
-
-  updateStaff: (id: string, body: Partial<Staff>) =>
-    request<Staff>(`/portal/staff/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 
   terminateStaff: (id: string) =>
     request<Staff>(`/portal/staff/${id}/terminate`, { method: "POST" }),

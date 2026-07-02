@@ -41,7 +41,7 @@ async def get_staff_by_pin(conn: asyncpg.Connection, pin: str) -> asyncpg.Record
     settings = get_settings()
     rows = await conn.fetch(
         f"""
-        SELECT s.id, s.first_name, s.last_name, s.staff_code, s.is_active,
+        SELECT s.id, s.first_name, s.middle_name, s.last_name, s.staff_code, s.is_active,
                p.pin_hash
         FROM {settings.db_schema}.staff s
         JOIN {settings.db_schema}.pin_credentials p ON p.staff_id = s.id

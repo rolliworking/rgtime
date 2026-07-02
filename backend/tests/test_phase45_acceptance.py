@@ -135,19 +135,19 @@ class TestStaffCodeSuggestion:
             pytest.skip("DATABASE_URL not reachable")
 
         code1 = await suggest_staff_code(conn, first_name="Vianna", last_name="Reyes")
-        assert code1 == "VIANNA"
+        assert code1 == "VR"
 
         staff_id = uuid.uuid4()
         try:
             await conn.execute(
                 """
                 INSERT INTO rgtime.staff (id, staff_code, first_name, last_name, hire_date)
-                VALUES ($1, 'VIANNA', 'Existing', 'Staff', '2020-01-01')
+                VALUES ($1, 'VR', 'Existing', 'Staff', '2020-01-01')
                 """,
                 staff_id,
             )
             code2 = await suggest_staff_code(conn, first_name="Vianna", last_name="Reyes")
-            assert code2 == "VIANNA2"
+            assert code2 == "VR2"
         finally:
             await conn.execute("DELETE FROM rgtime.staff WHERE id = $1", staff_id)
             await conn.close()

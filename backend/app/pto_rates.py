@@ -179,7 +179,9 @@ def ladder_for_work_date(
 _STAFF_CODE_BASE = re.compile(r"[^A-Z0-9]")
 
 
-def base_staff_code_from_name(first_name: str) -> str:
-    """Uppercase alphanumeric from first name, max 16 chars."""
-    base = _STAFF_CODE_BASE.sub("", first_name.strip().upper())
-    return (base or "STAFF")[:16]
+def base_staff_code_from_name(first_name: str, last_name: str = "") -> str:
+    """Deprecated: use app.staff_names.initials_staff_code."""
+    from app.staff_names import initials_staff_code
+
+    base, _ = initials_staff_code(first_name, last_name or "X")
+    return base

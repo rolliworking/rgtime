@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.audit import write_audit_log
+from app.staff_names import format_display_name
 from app.config import get_settings
 from app.dependencies import DbConn, get_actor_type
 from app.pin import validate_pin_format
@@ -85,7 +86,12 @@ async def kiosk_state(body: PinBody, conn: DbConn) -> KioskStateResponse:
     return KioskStateResponse(
         staff_id=staff["id"],
         staff_code=staff["staff_code"],
-        display_name=f"{staff['first_name']} {staff['last_name']}",
+        display_name=format_display_name(
+            staff["first_name"],
+            staff["last_name"],
+            middle_name=staff.get("middle_name"),
+            short_middle=True,
+        ),
         is_clocked_in=clocked_in,
         next_action="clock_out" if clocked_in else "clock_in",
     )
@@ -109,7 +115,12 @@ async def kiosk_punch(
     last = await get_last_event(conn, staff["id"])
     event_type = next_event_type(last)
     occurred_at = now_eastern()
-    display_name = f"{staff['first_name']} {staff['last_name']}"
+    display_name = format_display_name(
+        staff["first_name"],
+        staff["last_name"],
+        middle_name=staff.get("middle_name"),
+        short_middle=True,
+    )
 
     result = await record_punch(
         conn,

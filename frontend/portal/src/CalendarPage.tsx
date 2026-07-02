@@ -159,7 +159,7 @@ export function CalendarPage() {
                 <option value="">— select —</option>
                 {staff.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.staff_code} — {s.first_name} {s.last_name}
+                    {s.staff_code} — {s.display_name_short ?? `${s.first_name} ${s.last_name}`}
                   </option>
                 ))}
               </select>

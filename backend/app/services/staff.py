@@ -16,7 +16,6 @@ from app.pin import hash_pin, validate_pin_format
 from app.pto_rates import (
     PTO_ACCRUAL_TIERS,
     PtoOffer,
-    base_staff_code_from_name,
     derive_annual_from_daily,
     derive_daily_rate_from_annual,
     resolve_pto_rate,
@@ -24,6 +23,7 @@ from app.pto_rates import (
     tenure_years_on_date,
     effective_tenure_for_rate,
 )
+from app.staff_names import format_display_name, initials_staff_code, staff_code_with_suffix
 
 STAFF_CODE_PATTERN = re.compile(r"^[A-Z0-9]{1,16}$")
 
@@ -105,6 +105,18 @@ def _staff_row_to_dict(row: asyncpg.Record) -> dict[str, Any]:
     if d.get("hire_date"):
         hire = date.fromisoformat(d["hire_date"]) if isinstance(d["hire_date"], str) else d["hire_date"]
         d.update(tenure_info(hire, offer=_offer_from_staff(d)))
+    middle = d.get("middle_name")
+    d["display_name"] = format_display_name(
+        d.get("first_name", ""),
+        d.get("last_name", ""),
+        middle_name=middle,
+    )
+    d["display_name_short"] = format_display_name(
+        d.get("first_name", ""),
+        d.get("last_name", ""),
+        middle_name=middle,
+        short_middle=True,
+    )
     d["has_pin"] = bool(d.pop("has_pin", False))
     return d
 
@@ -138,27 +150,39 @@ async def get_staff(conn: asyncpg.Connection, staff_id: UUID) -> dict | None:
     return _staff_row_to_dict(row) if row else None
 
 
+async def _staff_code_taken(conn: asyncpg.Connection, code: str) -> bool:
+    """True if code was ever used (active or terminated staff)."""
+    settings = get_settings()
+    return bool(
+        await conn.fetchval(
+            f"SELECT 1 FROM {settings.db_schema}.staff WHERE staff_code = $1",
+            code,
+        )
+    )
+
+
 async def suggest_staff_code(
     conn: asyncpg.Connection,
     *,
     first_name: str,
-    last_name: str | None = None,
+    last_name: str = "",
+    middle_name: str | None = None,
 ) -> str:
-    """Suggest staff_code from name; append numeric suffix on collision."""
-    _ = last_name  # reserved for future multi-token codes
-    settings = get_settings()
-    base = base_staff_code_from_name(first_name)
-    candidate = base
+    """Suggest initials-based staff_code; never reuse a code that exists or existed."""
+    base, mid_code = initials_staff_code(first_name, last_name, middle_name=middle_name)
+
+    if not await _staff_code_taken(conn, base):
+        return base
+
+    if mid_code and not await _staff_code_taken(conn, mid_code):
+        return mid_code
+
+    root = mid_code if mid_code else base
     suffix = 2
     while True:
-        exists = await conn.fetchval(
-            f"SELECT 1 FROM {settings.db_schema}.staff WHERE staff_code = $1",
-            candidate,
-        )
-        if not exists:
+        candidate = staff_code_with_suffix(root, suffix)
+        if not await _staff_code_taken(conn, candidate):
             return candidate
-        suffix_str = str(suffix)
-        candidate = f"{base[: 16 - len(suffix_str)]}{suffix_str}"
         suffix += 1
 
 
@@ -169,6 +193,7 @@ async def create_staff(
     first_name: str,
     last_name: str,
     hire_date: date,
+    middle_name: str | None = None,
     auto_clock_out_cap: time = time(21, 0),
     face_check_enabled: bool = False,
     pto_offer_type: str = "default",
@@ -185,19 +210,21 @@ async def create_staff(
         pto_custom_annual_hours,
         pto_custom_daily_rate,
     )
+    middle = middle_name.strip() if middle_name and middle_name.strip() else None
     row = await conn.fetchrow(
         f"""
         INSERT INTO {settings.db_schema}.staff (
-            staff_code, first_name, last_name, hire_date,
+            staff_code, first_name, middle_name, last_name, hire_date,
             auto_clock_out_cap, face_check_enabled,
             pto_offer_type, pto_tenure_credit_years,
             pto_custom_annual_hours, pto_custom_daily_rate
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
         """,
         code,
         first_name.strip(),
+        middle,
         last_name.strip(),
         hire_date,
         auto_clock_out_cap,
@@ -229,11 +256,13 @@ async def update_staff(
     *,
     staff_id: UUID,
     first_name: str | None = None,
+    middle_name: str | None = None,
     last_name: str | None = None,
     hire_date: date | None = None,
     auto_clock_out_cap: time | None = None,
     face_check_enabled: bool | None = None,
     actor_id: UUID | None = None,
+    update_middle_name: bool = False,
 ) -> dict | None:
     settings = get_settings()
     old = await get_staff(conn, staff_id)
@@ -246,6 +275,10 @@ async def update_staff(
     if first_name is not None:
         updates.append(f"first_name = ${idx}")
         params.append(first_name.strip())
+        idx += 1
+    if update_middle_name:
+        updates.append(f"middle_name = ${idx}")
+        params.append(middle_name.strip() if middle_name and middle_name.strip() else None)
         idx += 1
     if last_name is not None:
         updates.append(f"last_name = ${idx}")

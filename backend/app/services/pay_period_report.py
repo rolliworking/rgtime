@@ -11,6 +11,7 @@ import asyncpg
 
 from app.config import get_settings
 from app.pto_rates import QUALIFYING_HOURS_THRESHOLD
+from app.staff_names import format_display_name
 from app.services.biweekly_audit import _day_credit_hours, audit_staff_period, build_period_audit
 from app.services.pay_period import PayPeriod, iter_dates, weeks_in_period
 from app.services.timesheet import get_staff_timesheet
@@ -52,7 +53,7 @@ async def staff_period_row(
     settings = get_settings()
     staff = await conn.fetchrow(
         f"""
-        SELECT id, staff_code, first_name, last_name, pto_balance
+        SELECT id, staff_code, first_name, middle_name, last_name, pto_balance
         FROM {settings.db_schema}.staff WHERE id = $1
         """,
         staff_id,
@@ -112,7 +113,12 @@ async def staff_period_row(
     return {
         "staff_id": str(staff_id),
         "staff_code": staff["staff_code"],
-        "name": f"{staff['first_name']} {staff['last_name']}",
+        "name": format_display_name(
+            staff["first_name"],
+            staff["last_name"],
+            middle_name=staff.get("middle_name"),
+            short_middle=True,
+        ),
         "days_worked": days_worked,
         "total_hours": str(total_hours.quantize(TWOPLACES)),
         "qualifying_days": qualifying_days,
