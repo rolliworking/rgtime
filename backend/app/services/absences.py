@@ -156,3 +156,105 @@ async def mark_absence_resolved(
         new_values=new,
     )
     return new
+
+
+async def list_absences_in_range(
+    conn: asyncpg.Connection,
+    *,
+    start_date: date,
+    end_date: date,
+    staff_id: UUID | None = None,
+) -> list[dict[str, Any]]:
+    settings = get_settings()
+    params: list[Any] = [start_date, end_date]
+    staff_filter = ""
+    if staff_id is not None:
+        staff_filter = "AND a.staff_id = $3"
+        params.append(staff_id)
+    rows = await conn.fetch(
+        f"""
+        SELECT a.*, r.name AS reason_name, r.funding, r.counts_as_worked,
+               s.staff_code, s.first_name, s.last_name
+        FROM {settings.db_schema}.absences a
+        JOIN {settings.db_schema}.absence_reasons r ON r.id = a.reason_id
+        JOIN {settings.db_schema}.staff s ON s.id = a.staff_id
+        WHERE a.absence_date BETWEEN $1 AND $2
+        {staff_filter}
+        ORDER BY a.absence_date, s.staff_code
+        """,
+        *params,
+    )
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        d = _row_to_dict(row)
+        d["staff_code"] = row["staff_code"]
+        d["first_name"] = row["first_name"]
+        d["last_name"] = row["last_name"]
+        d["reason_name"] = row["reason_name"]
+        d["funding"] = row["funding"]
+        result.append(d)
+    return result
+
+
+async def list_upcoming_for_staff(
+    conn: asyncpg.Connection,
+    *,
+    staff_id: UUID,
+    from_date: date | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    from_date = from_date or date.today()
+    settings = get_settings()
+    rows = await conn.fetch(
+        f"""
+        SELECT a.*, r.name AS reason_name, r.funding
+        FROM {settings.db_schema}.absences a
+        JOIN {settings.db_schema}.absence_reasons r ON r.id = a.reason_id
+        WHERE a.staff_id = $1 AND a.absence_date >= $2
+        ORDER BY a.absence_date ASC
+        LIMIT $3
+        """,
+        staff_id,
+        from_date,
+        limit,
+    )
+    return [_row_to_dict(r) | {"reason_name": r["reason_name"], "funding": r["funding"]} for r in rows]
+
+
+async def short_staffed_days(
+    conn: asyncpg.Connection,
+    *,
+    start_date: date,
+    end_date: date,
+    min_absent: int = 2,
+) -> list[dict[str, Any]]:
+    """Days with at least min_absent active staff out — short-staffed visibility."""
+    settings = get_settings()
+    active_count = await conn.fetchval(
+        f"SELECT COUNT(*) FROM {settings.db_schema}.staff WHERE is_active = TRUE"
+    )
+    rows = await conn.fetch(
+        f"""
+        SELECT a.absence_date AS work_date, COUNT(*) AS absent_count,
+               array_agg(s.staff_code ORDER BY s.staff_code) AS staff_codes
+        FROM {settings.db_schema}.absences a
+        JOIN {settings.db_schema}.staff s ON s.id = a.staff_id AND s.is_active = TRUE
+        WHERE a.absence_date BETWEEN $1 AND $2
+        GROUP BY a.absence_date
+        HAVING COUNT(*) >= $3
+        ORDER BY a.absence_date
+        """,
+        start_date,
+        end_date,
+        min_absent,
+    )
+    return [
+        {
+            "work_date": r["work_date"].isoformat(),
+            "absent_count": r["absent_count"],
+            "active_staff": active_count,
+            "staff_codes": list(r["staff_codes"]),
+            "short_staffed": True,
+        }
+        for r in rows
+    ]

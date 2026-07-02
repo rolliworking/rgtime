@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 
 from app.dependencies import DbConn, get_actor_type
 from app.portal_auth import require_portal_auth
-from app.services.absences import upsert_absence
+from app.services.absences import (
+    list_absences_in_range,
+    list_upcoming_for_staff,
+    short_staffed_days,
+    upsert_absence,
+)
 from app.services.absence_reasons import create_reason, list_reasons, update_reason
 from app.services.biweekly_audit import build_period_audit
 from app.services.face_reference import save_face_reference
@@ -663,6 +668,30 @@ async def portal_update_time_event(
     if result is None:
         raise HTTPException(status_code=404, detail="event not found")
     return result
+
+
+@router.get("/calendar/absences")
+async def portal_calendar_absences(
+    conn: DbConn,
+    start_date: date,
+    end_date: date,
+    staff_id: UUID | None = None,
+) -> dict:
+    absences = await list_absences_in_range(
+        conn, start_date=start_date, end_date=end_date, staff_id=staff_id
+    )
+    short_days = await short_staffed_days(conn, start_date=start_date, end_date=end_date)
+    return {"absences": absences, "short_staffed_days": short_days}
+
+
+@router.get("/staff/{staff_id}/upcoming-absences")
+async def portal_upcoming_absences(
+    staff_id: UUID,
+    conn: DbConn,
+    from_date: date | None = None,
+) -> dict:
+    upcoming = await list_upcoming_for_staff(conn, staff_id=staff_id, from_date=from_date)
+    return {"upcoming": upcoming}
 
 
 @router.post("/time-events/{event_id}/resolve-missing-clockout")

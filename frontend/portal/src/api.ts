@@ -92,6 +92,19 @@ export interface AuditFlag {
   detail: string;
 }
 
+export interface CalendarAbsence {
+  id: string;
+  staff_id: string;
+  staff_code: string;
+  first_name: string;
+  last_name: string;
+  absence_date: string;
+  reason_id: string;
+  reason_name: string;
+  funding: string;
+  notes?: string | null;
+}
+
 export interface AuditStaffPeriod {
   staff_id: string;
   staff_code: string;
@@ -279,4 +292,15 @@ export const api = {
     confirmed: boolean;
   }) =>
     request<unknown>("/portal/pto-draw/confirm", { method: "POST", body: JSON.stringify(body) }),
+
+  getCalendarAbsences: (start_date: string, end_date: string) =>
+    request<{
+      absences: CalendarAbsence[];
+      short_staffed_days: { work_date: string; absent_count: number; staff_codes: string[] }[];
+    }>(`/portal/calendar/absences?start_date=${start_date}&end_date=${end_date}`),
+
+  getUpcomingAbsences: (staffId: string, from_date?: string) =>
+    request<{ upcoming: CalendarAbsence[] }>(
+      `/portal/staff/${staffId}/upcoming-absences${from_date ? `?from_date=${from_date}` : ""}`
+    ),
 };
