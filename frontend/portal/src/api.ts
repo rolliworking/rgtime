@@ -81,6 +81,31 @@ export interface PtoLadderTier {
   effective_from: string;
 }
 
+export interface PayPeriod {
+  start_date: string;
+  end_date: string;
+}
+
+export interface AuditFlag {
+  work_date: string;
+  flag_type: string;
+  detail: string;
+}
+
+export interface AuditStaffPeriod {
+  staff_id: string;
+  staff_code: string;
+  first_name: string;
+  last_name: string;
+  pay_period_start: string;
+  pay_period_end: string;
+  week1_hours: string;
+  week2_hours: string;
+  pto_balance: string;
+  flags: AuditFlag[];
+  bucket: string;
+}
+
 export interface SchedulePreset {
   id: string;
   name: string;
@@ -213,4 +238,45 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+
+  listPayPeriods: () =>
+    request<{ anchor_date: string; periods: PayPeriod[] }>("/portal/pay-periods"),
+
+  getPeriodAudit: (periodStart: string) =>
+    request<{
+      pay_period_start: string;
+      pay_period_end: string;
+      clean: AuditStaffPeriod[];
+      flagged: AuditStaffPeriod[];
+      clean_count: number;
+      flagged_count: number;
+    }>(`/portal/pay-periods/${periodStart}/audit`),
+
+  getStaffTimesheet: (periodStart: string, staffId: string) =>
+    request<unknown>(`/portal/pay-periods/${periodStart}/staff/${staffId}/timesheet`),
+
+  upsertAbsence: (body: {
+    staff_id: string;
+    absence_date: string;
+    reason_id: string;
+    notes?: string;
+    pay_period_start?: string;
+  }) =>
+    request<unknown>("/portal/absences", { method: "POST", body: JSON.stringify(body) }),
+
+  proposePtoDraw: (staffId: string, hours: string) =>
+    request<{ hours: string; balance_before: string; balance_after: string }>(
+      "/portal/pto-draw/propose",
+      { method: "POST", body: JSON.stringify({ staff_id: staffId, hours }) }
+    ),
+
+  confirmPtoDraw: (body: {
+    staff_id: string;
+    hours: string;
+    work_date?: string;
+    pay_period_start?: string;
+    absence_id?: string;
+    confirmed: boolean;
+  }) =>
+    request<unknown>("/portal/pto-draw/confirm", { method: "POST", body: JSON.stringify(body) }),
 };

@@ -82,8 +82,8 @@ async def update_reason(
         return None
     old = _row_to_dict(old_row)
 
-    if funding is not None and funding not in VALID_FUNDING_VALUES:
-        raise ValueError(f"funding must be one of {VALID_FUNDING_VALUES}")
+    if funding is not None and funding not in FUNDING_VALUES:
+        raise ValueError(f"funding must be one of {sorted(FUNDING_VALUES)}")
 
     updates: list[str] = []
     params: list[Any] = [reason_id]

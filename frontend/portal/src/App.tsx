@@ -1,11 +1,12 @@
 import { FormEvent, useState } from "react";
 import { ApiError, api, clearToken, getToken, setToken } from "./api";
+import { AuditPage } from "./AuditPage";
 import { AbsenceReasonsPage } from "./AbsenceReasonsPage";
 import { PtoLadderPage } from "./PtoLadderPage";
 import { SchedulesPage } from "./SchedulesPage";
 import { StaffPage } from "./StaffPage";
 
-type Page = "staff" | "schedules" | "reasons" | "pto-ladder";
+type Page = "staff" | "schedules" | "reasons" | "pto-ladder" | "audit";
 
 function Login({ onLogin }: { onLogin: () => void }) {
   const [token, setTokenInput] = useState("");
@@ -83,6 +84,9 @@ export default function App() {
           <button type="button" className={page === "pto-ladder" ? "active" : ""} onClick={() => setPage("pto-ladder")}>
             PTO Ladder
           </button>
+          <button type="button" className={page === "audit" ? "active" : ""} onClick={() => setPage("audit")}>
+            Biweekly audit
+          </button>
           <button type="button" onClick={logout} style={{ marginTop: "2rem", color: "var(--text-muted)" }}>
             Sign out
           </button>
@@ -93,6 +97,7 @@ export default function App() {
         {page === "schedules" && <SchedulesPage />}
         {page === "reasons" && <AbsenceReasonsPage />}
         {page === "pto-ladder" && <PtoLadderPage />}
+        {page === "audit" && <AuditPage />}
       </main>
     </div>
   );

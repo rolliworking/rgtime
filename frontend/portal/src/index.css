@@ -302,3 +302,16 @@ textarea:focus {
   background: var(--error-bg);
   color: var(--error-text);
 }
+
+.audit-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.audit-clean {
+  border-left: 3px solid var(--accent-primary);
+}
+
+.audit-flagged {
+  border-left: 3px solid var(--error-border);
+}
