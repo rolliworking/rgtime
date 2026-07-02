@@ -92,6 +92,30 @@ export interface AuditFlag {
   detail: string;
 }
 
+export interface PayPeriodReportRow {
+  staff_id: string;
+  staff_code: string;
+  name: string;
+  days_worked: number;
+  total_hours: string;
+  qualifying_days: number;
+  pto_earned: string;
+  pto_used: string;
+  pto_balance: string;
+  absences_by_reason: Record<string, number>;
+  late_arrivals: number;
+  week1_hours: string;
+  week2_hours: string;
+  bucket: string;
+}
+
+export interface PayPeriodReport {
+  pay_period_start: string;
+  pay_period_end: string;
+  clean: PayPeriodReportRow[];
+  flagged: PayPeriodReportRow[];
+}
+
 export interface CalendarAbsence {
   id: string;
   staff_id: string;
@@ -303,4 +327,7 @@ export const api = {
     request<{ upcoming: CalendarAbsence[] }>(
       `/portal/staff/${staffId}/upcoming-absences${from_date ? `?from_date=${from_date}` : ""}`
     ),
+
+  getPayPeriodReport: (periodStart: string) =>
+    request<PayPeriodReport>(`/portal/pay-periods/${periodStart}/report`),
 };

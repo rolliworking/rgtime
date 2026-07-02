@@ -8,6 +8,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.dependencies import DbConn, get_actor_type
@@ -23,6 +24,8 @@ from app.services.biweekly_audit import build_period_audit
 from app.services.face_reference import save_face_reference
 from app.services.offer_templates import create_template, get_template, list_templates
 from app.services.pay_period import PayPeriod, get_anchor_date, list_periods
+from app.services.pay_period_report import build_pay_period_report, staff_time_card
+from app.services.pdf_report import render_pay_period_pdf, render_time_card_pdf
 from app.services.pto_draw import confirm_pto_draw, propose_pto_draw
 from app.services.pto_ladder import (
     get_active_ladder,
@@ -692,6 +695,44 @@ async def portal_upcoming_absences(
 ) -> dict:
     upcoming = await list_upcoming_for_staff(conn, staff_id=staff_id, from_date=from_date)
     return {"upcoming": upcoming}
+
+
+@router.get("/pay-periods/{period_start}/report")
+async def portal_pay_period_report_json(period_start: date, conn: DbConn) -> dict:
+    period = PayPeriod(period_start, period_start + timedelta(days=13))
+    return await build_pay_period_report(conn, period)
+
+
+@router.get("/pay-periods/{period_start}/report.pdf")
+async def portal_pay_period_report_pdf(period_start: date, conn: DbConn) -> Response:
+    period = PayPeriod(period_start, period_start + timedelta(days=13))
+    report = await build_pay_period_report(conn, period)
+    pdf_bytes = render_pay_period_pdf(report)
+    filename = f"rgtime-report-{period_start.isoformat()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/pay-periods/{period_start}/staff/{staff_id}/timecard.pdf")
+async def portal_staff_timecard_pdf(
+    period_start: date,
+    staff_id: UUID,
+    conn: DbConn,
+) -> Response:
+    period = PayPeriod(period_start, period_start + timedelta(days=13))
+    card = await staff_time_card(conn, staff_id=staff_id, period=period)
+    pdf_bytes = render_time_card_pdf(card["summary"], card["days"])
+    code = card["summary"]["staff_code"]
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="timecard-{code}-{period_start.isoformat()}.pdf"'
+        },
+    )
 
 
 @router.post("/time-events/{event_id}/resolve-missing-clockout")
